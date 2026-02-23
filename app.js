@@ -4375,8 +4375,8 @@ async function extractTextFromPdfFile(file){
   // PDF.js worker (safe even if it was already set)
   try{
     if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+      
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.mjs";
     }
   }catch{}
 
