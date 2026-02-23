@@ -933,6 +933,8 @@
 <script type="module">
   import * as pdfjsLib from "./pdf.mjs";
   window.pdfjsLib = pdfjsLib;
+  // ✅ Ensure worker resolves correctly on GitHub Pages / mobile Chrome
+  try{ pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.mjs"; }catch{}
 </script>
 <script src="./app.js?v=62"></script>
 
