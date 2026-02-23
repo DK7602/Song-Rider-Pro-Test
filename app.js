@@ -457,7 +457,7 @@ function parseFullTextToSectionCards(fullText){
   FULL_EDIT_SECTIONS.forEach(s => buckets[s] = []);
 
   let acc = []; // lines accumulating for current card block
-
+let pendingChordLine = null;
   const CHORD_TOKEN_RE = /^[A-G](?:#|b)?(?:m|maj|min|dim|aug|sus|add)?\d*(?:\/[A-G](?:#|b)?)?$/i;
 
   function isChordToken(tok){
@@ -611,24 +611,57 @@ function parseFullTextToSectionCards(fullText){
     buckets[cur].push(item);
   }
 
-  for(const rawLine of lines){
-    const line = String(rawLine ?? "");
+ for(const rawLine of lines){
 
-    const heading = isSectionHeadingLine(line);
-    if(heading){
-      flushCard();
-      cur = heading;
-      continue;
-    }
+  const line = String(rawLine ?? "");
+  const trimmed = line.trim();
 
-    if(line.trim() === ""){
-      flushCard();
-      continue;
-    }
-
-    acc.push(line);
+  // SECTION HEADING
+  const heading = isSectionHeadingLine(trimmed);
+  if(heading){
+    cur = heading;
+    pendingChordLine = null;
+    continue;
   }
-  flushCard();
+
+  // blank line resets pending chord line
+  if(!trimmed){
+    pendingChordLine = null;
+    continue;
+  }
+
+  // chord line (store it, wait for lyric line)
+  if(lineIsMostlyChords(trimmed)){
+    pendingChordLine = trimmed;
+    continue;
+  }
+
+  // lyric line → emit a card immediately
+  let chords = Array(8).fill("");
+
+  if(pendingChordLine){
+    const tokens = pendingChordLine.split(/\s+/).filter(Boolean);
+
+    if(tokens.length <= 8){
+      for(let i=0;i<tokens.length;i++){
+        chords[i] = tokens[i];
+      }
+    }else{
+      // distribute across 8 slots instead of skipping
+      for(let i=0;i<tokens.length;i++){
+        const slot = Math.min(7, Math.floor((i / tokens.length) * 8));
+        chords[slot] = tokens[i];
+      }
+    }
+  }
+
+  buckets[cur].push({
+    lyrics: trimmed,
+    chords
+  });
+
+  pendingChordLine = null;
+}
 
   return buckets;
 }
