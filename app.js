@@ -521,6 +521,8 @@ function parseFullTextToSectionCards(fullText){
     }
 
     function placeAlignedChordLine(chordLineRaw, lyricLineRaw){
+      // 🔥 CRITICAL: clear previous notes before placing new ones
+card.notes = ["","","","","","","",""];
       const chordLine = String(chordLineRaw || "");
       const lyricLine = String(lyricLineRaw || "");
       const denom = Math.max(1, chordLine.length - 1);
@@ -592,10 +594,16 @@ function parseFullTextToSectionCards(fullText){
 
     const anyChords = chordsSlots.some(x => String(x||"").trim());
     if(lyric || anyChords){
-      buckets[cur].push({
-        lyrics: lyric,
-        chords: chordsSlots
-      });
+    const cleanNotes = ["","","","","","","",""];
+
+for(let i=0;i<Math.min(curChords.length,8);i++){
+  cleanNotes[i] = curChords[i];
+}
+
+buckets[cur].push({
+  lyrics: lyric,
+  chords: cleanNotes
+}); 
     }
   }
 
