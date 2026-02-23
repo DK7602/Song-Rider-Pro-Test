@@ -479,50 +479,79 @@ function parseFullTextToSectionCards(fullText){
     return chordish >= Math.max(1, Math.ceil(tokens.length * 0.7));
   }
 
-  function flushCard(){
-    const blockLines = acc
-      .map(x => String(x || "").trim())
-      .filter(Boolean);
-    acc = [];
-    if(!blockLines.length) return;
+ function flushCard(){
+  const blockLines = acc
+    .map(x => String(x || "").trim())
+    .filter(Boolean);
+  acc = [];
+  if(!blockLines.length) return;
 
-    const chordsOut = [];
-    const lyricParts = [];
+  // Build "logical lyric lines" even when the source is wrapped like:
+  // D
+  // Amazing Grace, how
+  // G/D
+  // sweet the
+  // D
+  // sound,
+  //
+  // We collect chord-only lines into curChords, and stitch lyric fragments
+  // together until we hit punctuation (or end of block).
 
-    for(let i=0;i<blockLines.length;i++){
-      const L = blockLines[i];
+  let curChords = [];
+  let curLyricParts = [];
 
-      // chords line above lyric line
-      if(lineIsMostlyChords(L) && i+1 < blockLines.length && !lineIsMostlyChords(blockLines[i+1])){
-        const chordLine = L
-          .replace(/[\[\]\(\)\{\}]/g," ")
-          .replace(/[|]/g," ")
-          .split(/\s+/)
-          .filter(Boolean)
-          .map(x => x.trim())
-          .filter(isChordToken);
+  const isEndPunct = (s) => /[,\.\!\?\;\:]\s*$/.test(String(s || "").trim());
 
-        chordLine.forEach(c => chordsOut.push(c));
-        lyricParts.push(String(blockLines[i+1] || "").trim());
-        i++;
-        continue;
-      }
+  const addChordTokensFromLine = (line) => {
+    const toks = String(line || "")
+      .replace(/[\[\]\(\)\{\}]/g," ")
+      .replace(/[|]/g," ")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(x => x.trim())
+      .filter(isChordToken);
 
-      // inline chords
-      const { cleaned, chords } = extractInlineChords(L);
-      chords.forEach(c => chordsOut.push(c));
-      if(cleaned) lyricParts.push(cleaned);
+    toks.forEach(c => curChords.push(c));
+  };
+
+  const pushLogicalLine = () => {
+    const lyric = curLyricParts.join(" ").replace(/\s+/g," ").trim();
+    if(!lyric && curChords.length === 0){
+      curLyricParts = [];
+      curChords = [];
+      return;
+    }
+    buckets[cur].push({
+      lyrics: lyric,
+      chords: curChords.slice(0, 8)
+    });
+    curLyricParts = [];
+    curChords = [];
+  };
+
+  for(let i=0;i<blockLines.length;i++){
+    const L = blockLines[i];
+
+    // If it's a chord-only line (even a single chord like "D"), just collect it.
+    if(lineIsMostlyChords(L)){
+      addChordTokensFromLine(L);
+      continue;
     }
 
-    const lyric = lyricParts.join(" ").trim();
+    // Otherwise treat as lyric-ish line with possible inline chords.
+    const { cleaned, chords } = extractInlineChords(L);
+    chords.forEach(c => curChords.push(c));
+    if(cleaned) curLyricParts.push(cleaned);
 
-    if(lyric || chordsOut.length){
-      buckets[cur].push({
-        lyrics: lyric,
-        chords: chordsOut.slice(0, 8)
-      });
+    // End a logical lyric line when it looks complete.
+    if(cleaned && isEndPunct(cleaned)){
+      pushLogicalLine();
     }
   }
+
+  // Flush remainder
+  pushLogicalLine();
+}
 
   for(const rawLine of lines){
     const line = String(rawLine ?? "");
