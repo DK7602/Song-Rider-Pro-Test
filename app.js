@@ -2439,14 +2439,7 @@ function getScrollViewport(){
   }
   return null;
 }
-/* ✅ The render target must be a flex child so Full view can fill space
-      and so the sticky .sheetHeader behaves consistently on every page. */
-#sheetInner{
-  flex:1;
-  min-height:0;
-  display:flex;
-  flex-direction:column;
-}
+
 // Where the "play line" should be (top of the card viewport)
 function getHeaderBottomY(){
   const vp = getScrollViewport();
