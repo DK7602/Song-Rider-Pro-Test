@@ -460,7 +460,13 @@
   overflow:auto;                 /* ✅ THIS fixes “frozen cards” */
   -webkit-overflow-scrolling:touch;
 }
-
+/* ✅ Full page layout: make the render target a flex child */
+#sheetInner{
+  flex:1;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
 
     .cards{
   padding:0 12px 140px;  /* ✅ more room at bottom */
@@ -902,7 +908,7 @@
 
 <main>
   <div class="sheet" id="editorRoot">
-    <!-- ✅ #sheetBody is the LOWER panel scroller; header must be INSIDE it so sticky works -->
+    <!-- ✅  is the LOWER panel scroller; header must be INSIDE it so sticky works -->
     <div id="sheetBody">
       <div class="sheetHeader">
         <h2 id="sheetTitle">Full</h2>
