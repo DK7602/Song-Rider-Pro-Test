@@ -478,24 +478,17 @@ function parseFullTextToSectionCards(fullText){
     const chordish = tokens.filter(isChordToken).length;
     return chordish >= Math.max(1, Math.ceil(tokens.length * 0.7));
   }
-
- function flushCard(){
+function flushCard(){
   const blockLines = acc
-    .map(x => String(x || "").trim())
-    .filter(Boolean);
+    .map(x => String(x || "").trimEnd())
+    .filter(x => x.trim().length > 0);
   acc = [];
   if(!blockLines.length) return;
 
-  // Build "logical lyric lines" even when the source is wrapped like:
-  // D
-  // Amazing Grace, how
-  // G/D
-  // sweet the
-  // D
-  // sound,
-  //
-  // We collect chord-only lines into curChords, and stitch lyric fragments
-  // together until we hit punctuation (or end of block).
+  // We support:
+  // 1) chord-line ABOVE lyric-line (pair them)
+  // 2) alternating single chord lines + wrapped lyric fragments
+  // 3) inline chords like [G]Amazing or (G)Amazing
 
   let curChords = [];
   let curLyricParts = [];
@@ -532,13 +525,36 @@ function parseFullTextToSectionCards(fullText){
   for(let i=0;i<blockLines.length;i++){
     const L = blockLines[i];
 
-    // If it's a chord-only line (even a single chord like "D"), just collect it.
+    // ✅ CASE 1: chord-line immediately followed by lyric-line
+    // Example:
+    // D     G/D     D
+    // Amazing Grace, how sweet the sound
+    if(lineIsMostlyChords(L) && i+1 < blockLines.length && !lineIsMostlyChords(blockLines[i+1])){
+      // if we were building a previous wrapped line, finish it first
+      if(curLyricParts.length || curChords.length) pushLogicalLine();
+
+      const chordLine = L;
+      const lyricLineRaw = blockLines[i+1];
+
+      addChordTokensFromLine(chordLine);
+
+      const { cleaned, chords } = extractInlineChords(lyricLineRaw);
+      chords.forEach(c => curChords.push(c));
+      if(cleaned) curLyricParts.push(cleaned);
+
+      pushLogicalLine();
+      i++; // skip the lyric line we consumed
+      continue;
+    }
+
+    // ✅ CASE 2: chord-only line by itself (even single chord like "D")
+    // We collect it and keep stitching lyrics until punctuation/end.
     if(lineIsMostlyChords(L)){
       addChordTokensFromLine(L);
       continue;
     }
 
-    // Otherwise treat as lyric-ish line with possible inline chords.
+    // ✅ CASE 3: lyric-ish line (maybe with inline chords)
     const { cleaned, chords } = extractInlineChords(L);
     chords.forEach(c => curChords.push(c));
     if(cleaned) curLyricParts.push(cleaned);
@@ -549,7 +565,7 @@ function parseFullTextToSectionCards(fullText){
     }
   }
 
-  // Flush remainder
+  // flush remainder
   pushLogicalLine();
 }
 
