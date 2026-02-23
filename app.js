@@ -2410,7 +2410,14 @@ function getScrollViewport(){
   }
   return null;
 }
-
+/* ✅ The render target must be a flex child so Full view can fill space
+      and so the sticky .sheetHeader behaves consistently on every page. */
+#sheetInner{
+  flex:1;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
 // Where the "play line" should be (top of the card viewport)
 function getHeaderBottomY(){
   const vp = getScrollViewport();
@@ -4339,7 +4346,7 @@ async function importTextToFull(text){
 
   const cleaned = normalizeLineBreaks(String(text || "")).trim();
   if(!cleaned){
-    alert("No text found to import.");
+    alert("No text found to import. This PDF may be image-only (scanned) with no selectable text. Try: open the PDF → Select All → Copy → paste here, or export/print-to-PDF with text enabled.");
     return;
   }
 
@@ -4386,7 +4393,21 @@ async function extractTextFromPdfFile(file){
   let out = [];
   for(let p=1; p<=pdf.numPages; p++){
     const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
+   // Some PDFs only expose text with specific flags; try a couple of safe variants.
+let content = null;
+try{
+  content = await page.getTextContent({ normalizeWhitespace:true, disableCombineTextItems:false });
+}catch{}
+if(!content || !Array.isArray(content.items) || content.items.length === 0){
+  try{
+    content = await page.getTextContent({ normalizeWhitespace:true, disableCombineTextItems:true, includeMarkedContent:true });
+  }catch{}
+}
+if(!content || !Array.isArray(content.items) || content.items.length === 0){
+  // Image-only/scanned page (no text layer)
+  if(p !== pdf.numPages) out.push("");
+  continue;
+}
 
     // sort by Y (desc), then X (asc) to recreate readable lines
     const items = (content.items || []).map(it => ({
