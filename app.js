@@ -3917,27 +3917,29 @@ async function exportFullPreview(){
     const htmlDoc = buildFullPreviewHtmlDoc(`${safeName} - Full Preview`);
     const htmlBlob = new Blob([htmlDoc], { type:"text/html;charset=utf-8" });
 
-    // ✅ Most compatible on Android/PWA: download via <a download>
+       // ✅ Most compatible on Android/PWA: download via <a download>
     try{
-      const url = URL.createObjectURL(htmlBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = htmlName;
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
-      return;
-    }catch(e){ lastErr = e; }
+      const downloadBlob = (blob, filename) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+      };
 
-    // ✅ Next: Web Share (Android Chrome usually supports this)
-    try{
-      const htmlFile = new File([htmlBlob], htmlName, { type:"text/html" });
-      if(navigator.share && navigator.canShare && navigator.canShare({ files:[htmlFile] })){
-        await navigator.share({ title: safeName, files: [htmlFile] });
-        return;
-      }
+      // 1) TXT
+      const txtName = `${safeName} - Full Preview.txt`;
+      const txtBlob = new Blob([plain], { type:"text/plain;charset=utf-8" });
+      downloadBlob(txtBlob, txtName);
+
+      // 2) HTML (printable with red notes)
+      downloadBlob(htmlBlob, htmlName);
+
+      return;
     }catch(e){ lastErr = e; }
 
     // ✅ Next: File System Access API (desktop Chromes + some Android builds)
