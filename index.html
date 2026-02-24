@@ -936,14 +936,10 @@
   <!-- ✅ tiny helper: measure sticky header height into CSS var -->
 
 <script src="./lame.min.js?v=62"></script>
-<script src="./pdf.min.js?v=20"></script>
-<script>
-  // pdf.js (local)
-  try{
-    if(window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions){
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js?v=20";
-    }
-  }catch{}
+<script type="module">
+  import * as pdfjsLib from "./pdf.mjs?v=20";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.mjs?v=20";
+  window.pdfjsLib = pdfjsLib; // <-- makes your existing app.js code work unchanged
 </script>
 <script src="./app.js?v=PDF19"></script>
 
