@@ -4101,7 +4101,7 @@ function syncFullTextFromSections(){
     const out = [];
 
     // Build headings + lyrics (blank line between cards)
-    FULL_EDIT_SECTIONS.forEach(sec => {
+  getAllSectionOrder().filter(s => s !== "Full").forEach(sec => {
       out.push(sec);
       // optional page title line (not a card)
       const ttl = (state.project.sectionTitles && state.project.sectionTitles[sec]) ? String(state.project.sectionTitles[sec] || "").trim() : "";
@@ -4227,16 +4227,26 @@ function renderSheetTitleBar(){
     addBtn.style.borderRadius = "999px";
     addBtn.style.fontWeight = "1100";
     addBtn.addEventListener("click", () => {
-      const next = findNextSectionToEnable(state.currentSection);
-      if(!next){
-        alert("No more pages to add in the sequence.");
-        return;
-      }
-      editProject("addPage", () => {
-        enableSection(next);
-      });
-      goToSection(next);
-    });
+   addBtn.addEventListener("click", () => {
+  const next = findNextSectionToEnable(state.currentSection);
+
+  let target = next;
+
+  editProject("addPage", () => {
+    if(next === "__CREATE_EXTRA__"){
+      target = createExtraSection();     // ✅ makes EXTRA 1 / EXTRA 2 / ...
+    }else{
+      enableSection(next);               // ✅ base page enable
+    }
+  });
+
+  if(!target){
+    alert("Could not create an extra page.");
+    return;
+  }
+
+  goToSection(target);
+});
 
     const delBtn = document.createElement("button");
     delBtn.className = "btn secondary";
@@ -5827,14 +5837,49 @@ function updateAudioButtonsUI(){
 }
 /***********************
 SECTION paging (swipe left/right)
-Order loops back to Full after CHORUS 3
++ Dynamic EXTRA pages
 ***********************/
-const BASE_SECTION_ORDER = SECTIONS.slice(); // stable, includes "Full" first
+const BASE_SECTION_ORDER = SECTIONS.slice(); // stable base, includes "Full" first
 
 function ensurePageMeta(){
   if(!state.project) return;
   if(!Array.isArray(state.project.enabledSections)) state.project.enabledSections = [];
   if(!state.project.sectionTitles || typeof state.project.sectionTitles !== "object") state.project.sectionTitles = {};
+  if(!Array.isArray(state.project.extraSections)) state.project.extraSections = []; // ✅ NEW
+}
+
+// ✅ Full order = base order + extras appended (extras are project-specific)
+function getAllSectionOrder(){
+  ensurePageMeta();
+  const extras = (state.project.extraSections || []).filter(Boolean);
+  // Keep "Full" first, then base sections, then extras
+  return [...BASE_SECTION_ORDER, ...extras.filter(x => x !== "Full" && !BASE_SECTION_ORDER.includes(x))];
+}
+
+function nextExtraSectionName(){
+  ensurePageMeta();
+  const used = new Set([...(state.project.extraSections || [])]);
+  let n = 1;
+  while(used.has(`EXTRA ${n}`)) n++;
+  return `EXTRA ${n}`;
+}
+
+function createExtraSection(){
+  if(!state.project) return null;
+  ensurePageMeta();
+
+  const sec = nextExtraSectionName();
+
+  if(!state.project.sections) state.project.sections = {};
+  if(!Array.isArray(state.project.sections[sec])) state.project.sections[sec] = [newLine()];
+
+  // Visible even if blank (because user added it)
+  if(!state.project.enabledSections.includes(sec)) state.project.enabledSections.push(sec);
+
+  // Persist the page in the project’s dynamic list
+  if(!state.project.extraSections.includes(sec)) state.project.extraSections.push(sec);
+
+  return sec;
 }
 
 function lineHasAnyContent(line){
@@ -5864,7 +5909,7 @@ function isSectionVisible(sec){
 function getVisibleSectionPages(){
   ensurePageMeta();
   const pages = ["Full"];
-  for(const sec of BASE_SECTION_ORDER){
+  for(const sec of getAllSectionOrder()){
     if(sec === "Full") continue;
     if(isSectionVisible(sec)) pages.push(sec);
   }
@@ -5872,20 +5917,27 @@ function getVisibleSectionPages(){
 }
 
 function findNextSectionToEnable(fromSec){
-  const order = BASE_SECTION_ORDER.filter(s => s !== "Full");
-  const curIdx = Math.max(0, order.indexOf(fromSec));
-  for(let step=1; step<=order.length; step++){
-    const sec = order[(curIdx + step) % order.length];
+  // 1) Prefer the next hidden BASE page in sequence
+  const base = BASE_SECTION_ORDER.filter(s => s !== "Full");
+  const curIdx = Math.max(0, base.indexOf(fromSec));
+  for(let step=1; step<=base.length; step++){
+    const sec = base[(curIdx + step) % base.length];
     if(!isSectionVisible(sec)) return sec;
   }
-  return null;
-}
 
+  // 2) If all base pages are already visible, create a NEW EXTRA page
+  return "__CREATE_EXTRA__";
+}
 function enableSection(sec){
   if(!state.project) return;
   ensurePageMeta();
   if(!sec || sec === "Full") return;
-  if(!BASE_SECTION_ORDER.includes(sec)) return;
+
+  // ✅ allow base OR existing extras
+  const isBase = BASE_SECTION_ORDER.includes(sec);
+  const isExtra = (state.project.extraSections || []).includes(sec);
+  if(!isBase && !isExtra) return;
+
   if(!state.project.sections) state.project.sections = {};
   if(!Array.isArray(state.project.sections[sec])) state.project.sections[sec] = [newLine()];
   if(!state.project.enabledSections.includes(sec)) state.project.enabledSections.push(sec);
@@ -5896,11 +5948,19 @@ function deleteSectionPage(sec){
   ensurePageMeta();
   if(!sec || sec === "Full") return;
 
+  // clear its cards
   if(state.project.sections && state.project.sections[sec]){
     state.project.sections[sec] = [newLine()];
   }
+
+  // hide it
   state.project.enabledSections = state.project.enabledSections.filter(x => x !== sec);
+
+  // remove title
   try{ delete state.project.sectionTitles[sec]; }catch{}
+
+  // ✅ if it's an EXTRA page, remove the page itself from the dynamic list
+  state.project.extraSections = (state.project.extraSections || []).filter(x => x !== sec);
 }
 
 function isEditableEl(target){
