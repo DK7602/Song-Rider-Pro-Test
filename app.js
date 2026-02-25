@@ -2143,7 +2143,7 @@ function pianoNote(ctx, freq, durMs, vel=0.9){
   o.detune.value = 0;
 
   const g = ctx.createGain();
-  const peak = 0.22 * clamp(vel, 0.2, 1.0);
+  const peak = 0.11 * clamp(vel, 0.2, 1.0);
 
   g.gain.setValueAtTime(0.0001, t0);
   g.gain.exponentialRampToValueAtTime(peak, t0 + 0.008);
@@ -2176,7 +2176,7 @@ function pianoNote(ctx, freq, durMs, vel=0.9){
 
   const ng = ctx.createGain();
   ng.gain.setValueAtTime(0.0001, t0);
-  ng.gain.exponentialRampToValueAtTime(0.06 * clamp(vel,0.2,1.0), t0 + 0.002);
+  ng.gain.exponentialRampToValueAtTime(0.03 * clamp(vel,0.2,1.0), t0 + 0.002);
   ng.gain.exponentialRampToValueAtTime(0.0001, t0 + nLen);
 
   // body EQ
@@ -2445,10 +2445,10 @@ function playPianoChord(ch, durMs, fracMul=1){
   const room = makeSoftRoom(ctx);
 
  const dryBus = ctx.createGain();
-dryBus.gain.value = 0.35;   // ✅ closer to electric perceived loudness
+dryBus.gain.value = 0.22;   // ✅ closer to electric perceived loudness
 
 const wet = ctx.createGain();
-wet.gain.value = 0.08;      // ✅ less room so it doesn't “wash” louder
+wet.gain.value = 0.06;      // ✅ less room so it doesn't “wash” louder
 
   dryBus.connect(getOutNode());
   dryBus.connect(room.in);
