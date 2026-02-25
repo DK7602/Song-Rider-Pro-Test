@@ -4226,20 +4226,30 @@ function renderSheetTitleBar(){
     addBtn.style.height = "34px";
     addBtn.style.borderRadius = "999px";
     addBtn.style.fontWeight = "1100";
-    addBtn.addEventListener("click", () => {
    addBtn.addEventListener("click", () => {
   const next = findNextSectionToEnable(state.currentSection);
 
-  let target = next;
+  let target = null;
 
   editProject("addPage", () => {
     if(next === "__CREATE_EXTRA__"){
       target = createExtraSection();     // ✅ makes EXTRA 1 / EXTRA 2 / ...
     }else{
       enableSection(next);               // ✅ base page enable
+      target = next;
     }
+
+    // keep Full page synced
+    syncFullTextFromSections();
   });
 
+  if(!target){
+    alert("Could not create an extra page.");
+    return;
+  }
+
+  goToSection(target);
+});
   if(!target){
     alert("Could not create an extra page.");
     return;
