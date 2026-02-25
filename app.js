@@ -4250,13 +4250,6 @@ function renderSheetTitleBar(){
 
   goToSection(target);
 });
-  if(!target){
-    alert("Could not create an extra page.");
-    return;
-  }
-
-  goToSection(target);
-});
 
     const delBtn = document.createElement("button");
     delBtn.className = "btn secondary";
