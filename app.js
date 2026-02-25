@@ -1853,41 +1853,47 @@ Voicing builders
 ***********************/
 function buildPianoVoicing(ch){
   const root = ch.rootPC;
-  const tones = ch.intervals.map(iv => (root + iv) % 12);
 
-  const bassPC = (ch.bassPC !== null) ? ch.bassPC : root;
-  const bass = nearestMidiForPC(bassPC, 48); // ~C3
+  // chord pitch-classes from parsed intervals (literal chord tones)
+  let pcs = Array.from(new Set((ch.intervals || []).map(iv => (root + iv) % 12)));
 
-  const target = 64; // ~E4
+  // ensure root is included
+  if(!pcs.includes(root)) pcs.unshift(root);
+
+  // sort pcs by distance above root (0..11)
+  pcs.sort((a,b)=>(((a-root+12)%12) - ((b-root+12)%12)));
+
+  // left-hand bass: honor slash chords, otherwise root
+  const bassPC = (ch.bassPC !== null && ch.bassPC !== undefined) ? ch.bassPC : root;
+  const bass = nearestMidiForPC(bassPC, 48); // ~C3 area
+
+  // right-hand: stack chord tones upward in a predictable way
   const mids = [];
+  let target = 60; // start around C4
 
-  const want = [];
-  const has = (pc)=> tones.includes(pc);
+  for(const pc of pcs){
+    let m = nearestMidiForPC(pc, target);
 
-  const thirdPC = (root + (ch.triad==="min"?3:(ch.triad==="sus2"?2:(ch.triad==="sus4"?5:4)))) % 12;
-  const fifthPC = (root + (ch.triad==="dim"?6:(ch.triad==="aug"?8:7))) % 12;
-  const seventhPC = has((root+11)%12) ? (root+11)%12 : (has((root+10)%12) ? (root+10)%12 : null);
-  const ninthPC = has((root+2)%12) ? (root+2)%12 : null;
+    // keep everything clearly above bass
+    while(m <= bass + 3) m += 12;
 
-  if(has(thirdPC)) want.push(thirdPC);
-  if(seventhPC!==null) want.push(seventhPC);
-  if(has(fifthPC)) want.push(fifthPC);
-  if(ninthPC!==null) want.push(ninthPC);
-  want.push(root);
+    // keep ascending stack
+    if(mids.length){
+      while(m <= mids[mids.length - 1] + 1) m += 12;
+    }
 
-  for(const pc of want){
-    const m = nearestMidiForPC(pc, target + mids.length*3);
-    if(!mids.includes(m)) mids.push(m);
-    if(mids.length >= 4) break;
+    mids.push(m);
+    target = m + 3;
   }
 
-  while(mids.length < 3){
-    const pc = tones[mids.length % tones.length];
-    const m = nearestMidiForPC(pc, target + mids.length*3);
-    if(!mids.includes(m)) mids.push(m);
-  }
+  // add a top root for “piano chord” fullness
+  let top = nearestMidiForPC(root, (mids[mids.length - 1] || 60) + 7);
+  while(top <= (mids[mids.length - 1] || 60) + 2) top += 12;
+  mids.push(top);
 
-  return [bass, ...mids].sort((a,b)=>a-b);
+  // final sorted unique list
+  const all = [bass, ...mids].sort((a,b)=>a-b);
+  return Array.from(new Set(all));
 }
 
 function buildGuitarStrumVoicing(ch){
@@ -2341,7 +2347,7 @@ const fracMul = Math.pow(2, (tr.fracSemis / 12));
     n.out.connect(getOutNode());
     scheduleCleanup([n.out], durMs + 1400);
   }else{
-    const n = pianoNote(ctx, f, durMs, 0.95);
+    const n = pianoNote(ctx, f, durMs, 0.65);
     n.out.connect(getOutNode());
     scheduleCleanup([n.out], durMs + 6000);
   }
@@ -2438,11 +2444,11 @@ function playPianoChord(ch, durMs, fracMul=1){
   const ctx = ensureCtx();
   const room = makeSoftRoom(ctx);
 
-  const dryBus = ctx.createGain();
-  dryBus.gain.value = 0.95;
+ const dryBus = ctx.createGain();
+dryBus.gain.value = 0.35;   // ✅ closer to electric perceived loudness
 
-  const wet = ctx.createGain();
-  wet.gain.value = 0.26;
+const wet = ctx.createGain();
+wet.gain.value = 0.08;      // ✅ less room so it doesn't “wash” louder
 
   dryBus.connect(getOutNode());
   dryBus.connect(room.in);
