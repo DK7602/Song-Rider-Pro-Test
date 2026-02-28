@@ -2811,7 +2811,6 @@ function getCardAtPlayLine(){
   return getNearestVisibleCard() || cards[0];
 }
 
-
 function scrollCardIntoView(card){
   if(!card) return;
 
@@ -2822,28 +2821,32 @@ function scrollCardIntoView(card){
     const sbRect = sb.getBoundingClientRect();
     const r = card.getBoundingClientRect();
 
+    // ✅ IMPORTANT: account for the sticky header inside sheetBody
+    const stickyHeader = sb.querySelector(".sheetHeader");
+    const stickyH = stickyHeader ? stickyHeader.getBoundingClientRect().height : 0;
+
     // how far the card is from the top of the scroll viewport
     const delta = (r.top - sbRect.top);
 
-    // target = current scrollTop + delta - padding
-    const pad = 12;
+    // ✅ pad = sticky header height + a little breathing room
+    const pad = Math.round(stickyH + 16);
+
+    // target = current scrollTop + delta - pad
     const target = Math.max(0, Math.round(sb.scrollTop + delta - pad));
 
     const maxScroll = Math.max(0, sb.scrollHeight - sb.clientHeight);
-sb.scrollTop = Math.min(maxScroll, target);
+    sb.scrollTop = Math.min(maxScroll, target);
     return;
   }
 
-  // fallback
+  // fallback (window scrolling)
   const yLine = getHeaderBottomY();
-  const r = card.getBoundingClientRect();
-  const cardTopDoc = r.top + window.scrollY;
+  const r2 = card.getBoundingClientRect();
+  const cardTopDoc = r2.top + window.scrollY;
   const targetY = Math.max(0, Math.round(cardTopDoc - yLine));
   try{ window.scrollTo({ top: targetY, behavior:"auto" }); }
   catch{ window.scrollTo(0, targetY); }
 }
-
-
 
 /***********************
 Tie utilities (across cards)
