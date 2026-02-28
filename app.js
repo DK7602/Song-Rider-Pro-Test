@@ -4170,64 +4170,10 @@ async function exportFullPreview(){
 Sheet rendering
 ***********************/
 function renderSheetActions(){
-  el.sheetActions.innerHTML = "";
-  if(!state.project) return;
-
-  // Full-page header actions are handled in renderTabs() (top bar)
-  if(state.currentSection === "Full") return;
-
-  ensurePageMeta();
-
-  const addBtn = document.createElement("button");
-  addBtn.className = "miniIconBtn";
-  addBtn.textContent = "+";
-  addBtn.title = "Add next page";
-
-  addBtn.addEventListener("click", () => {
-    const from = state.currentSection;
-    const next = findNextSectionToEnable(from);
-
-    let target = null;
-    editProject("addPageFromHeader", () => {
-      if(next === "__CREATE_EXTRA__"){
-        target = createExtraSection();
-      }else{
-        enableSection(next);
-        target = next;
-      }
-      syncFullTextFromSections();
-    });
-
-    if(target){
-      goToSection(target);
-      render();
-    }
-  });
-
-  const delBtn = document.createElement("button");
-  delBtn.className = "miniIconBtn";
-  delBtn.textContent = "✕";
-  delBtn.title = "Delete this page";
-
-  delBtn.addEventListener("click", () => {
-    const sec = state.currentSection;
-    if(!sec || sec === "Full") return;
-
-    const pagesBefore = getVisibleSectionPages();
-    const i = pagesBefore.indexOf(sec);
-    const fallback = pagesBefore[i-1] || "Full";
-
-    editProject("deletePage", () => {
-      deleteSectionPage(sec);
-      syncFullTextFromSections();
-    });
-
-    goToSection(isSectionVisible(fallback) ? fallback : "Full");
-    render();
-  });
-
-  el.sheetActions.appendChild(addBtn);
-  el.sheetActions.appendChild(delBtn);
+  // ✅ We moved the page (+ / ✕) controls into the title bar (renderSheetTitleBar).
+  // This area used to show duplicate buttons under the title. Keep it empty.
+  if(el.sheetActions) el.sheetActions.innerHTML = "";
+  return;
 }
 
 function buildFullTemplate(){
