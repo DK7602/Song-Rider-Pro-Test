@@ -4401,21 +4401,47 @@ function syncFullTextFromSections(){
   _fullSyncLock = true;
   try{
     const out = [];
+    const semis = getTransposeSemis() || 0;
 
-    // Build headings + lyrics (blank line between cards)
-  getAllSectionOrder().filter(s => s !== "Full").forEach(sec => {
-      const ttl = (state.project.sectionTitles && state.project.sectionTitles[sec]) ? String(state.project.sectionTitles[sec] || "").trim() : "";
+    // Build headings + (CHORD LINE + LYRIC LINE) blocks
+    getAllSectionOrder().filter(s => s !== "Full").forEach(sec => {
+      const ttl = (state.project.sectionTitles && state.project.sectionTitles[sec])
+        ? String(state.project.sectionTitles[sec] || "").trim()
+        : "";
       const heading = ttl || sec;
       out.push(heading);
 
       const arr = (state.project.sections && state.project.sections[sec]) ? state.project.sections[sec] : [];
 
       let wroteAny = false;
+
       for(const line of arr){
-        const lyr = String(line?.lyrics || "").trim();
+        const lyrRaw = String(line?.lyrics || "");
+        const lyr = lyrRaw.trim();
+
+        const notesRaw = Array.isArray(line?.notes) ? line.notes : [];
+        const hasNotes = notesRaw.some(n => String(n || "").trim());
+
+        // ✅ If the card has chords but no lyrics, still show chords in Full view (copy/paste use case)
+        if(!lyr && hasNotes){
+          const notesT = notesRaw.map(n => transposeChordLabel(n, semis)).filter(Boolean).join(" ").trim();
+          if(notesT){
+            wroteAny = true;
+            out.push(notesT);
+            out.push(""); // blank line = next card
+          }
+          continue;
+        }
+
+        // ✅ Normal lyric lines: include chord-line above lyric line when present
         if(!lyr) continue;
+
+        const notesT = notesRaw.map(n => transposeChordLabel(n, semis));
+        const { chordLine, lyricLine } = buildChordSheetLines(notesT, lyrRaw);
+
         wroteAny = true;
-        out.push(lyr);
+        if(String(chordLine || "").trim()) out.push(chordLine);
+        out.push(String(lyricLine || "").trimRight());
         out.push(""); // blank line = next card
       }
 
@@ -4433,18 +4459,8 @@ function syncFullTextFromSections(){
     text = ensureFullHeadingsPresent(text);
 
     state.project.fullText = text;
-// ✅ do NOT save here — caller decides when to save/commit history
-
-    // If Full page is currently open, update the textarea too
-    if(state.currentSection === "Full"){
-      const ta = document.querySelector("textarea.fullBox");
-      if(ta){
-        const s = ta.selectionStart, e = ta.selectionEnd;
-        ta.value = state.project.fullText || "";
-        try{ ta.selectionStart = s; ta.selectionEnd = e; }catch{}
-      }
-    }
-  } finally {
+    // ✅ do NOT save here — caller decides when to save/commit history
+  }finally{
     _fullSyncLock = false;
   }
 }
