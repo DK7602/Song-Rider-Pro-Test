@@ -542,6 +542,33 @@ const hasBreaks = lines.some(l => !!_parseBreakLine(l));
     return CHORD_TOKEN_RE.test(t);
   }
 
+  // ✅ Positional chord tokens:
+  // A leading digit 1-8 sets the target chord box, e.g. "1Am 5Dm" -> slot0=Am, slot4=Dm
+  // IMPORTANT: chord-internal numbers like "E7" are NOT positions (no leading digit).
+  function parsePositionalChordToken(tok){
+    let t = String(tok || "").trim();
+    if(!t) return null;
+
+    // strip surrounding bracket wrappers, keep inner
+    t = t.replace(/^[\[\(\{]+/,"").replace(/[\]\)\}]+$/,"").trim();
+    t = t.replace(/♯/g,"#").replace(/♭/g,"b");
+    t = t.replace(/[\.,;:]+$/,"").trim();
+    t = t.replace(/\s+/g,"");
+
+    const m = t.match(/^([1-8])(.+)$/);
+    if(!m) return null;
+    const slot = clamp(parseInt(m[1],10) - 1, 0, 7);
+    const chord = String(m[2] || "").trim();
+
+    // chord part must be a valid chord token
+    if(!isChordToken(chord)) return null;
+    return { slot, chord };
+  }
+
+  function isChordishToken(tok){
+    return isChordToken(tok) || !!parsePositionalChordToken(tok);
+  }
+
   function extractInlineChords(line){
     const chords = [];
     let cleaned = String(line || "");
@@ -559,44 +586,56 @@ const hasBreaks = lines.some(l => !!_parseBreakLine(l));
     return { cleaned, chords };
   }
 
-  function lineIsMostlyChords(line){
-    const raw0 = String(line || "");
-    const raw = raw0.trim();
+    function lineIsMostlyChords(line){
+    const raw = String(line || "").replace(/\u00A0/g," ").trim();
     if(!raw) return false;
 
-    const single = raw.replace(/[|\t]+/g," ").trim().split(/\s+/).filter(Boolean);
-    if(single.length === 1){
-      const t1 = single[0]
-        .replace(/^[^A-Za-z0-9#b\/\.]+/,"")
-        .replace(/[^A-Za-z0-9#b\/\.]+$/,"")
-        .trim()
-        .replace(/♯/g,"#").replace(/♭/g,"b");
-      if(isChordToken(t1)) return true;
+    // Split on whitespace / bars / commas to catch common chord charts like:
+    // "Am | G | F"  or  "Am, G, F"  or  "Am    G    F"
+    const toks0 = raw.split(/[\s|,]+/).map(s=>s.trim()).filter(Boolean);
+    if(!toks0.length) return false;
+
+    const normTok = (t) => String(t || "")
+      .trim()
+      .replace(/^[\[\(\{]+/,"").replace(/[\]\)\}]+$/,"")
+      .replace(/^[^A-Za-z0-9#b\/\.]+/,"")
+      .replace(/[^A-Za-z0-9#b\/\.]+$/,"")
+      .replace(/[\.,;:]+$/,"")
+      .replace(/♯/g,"#").replace(/♭/g,"b")
+      .trim()
+      .replace(/\s+/g,"");
+
+    let chordCount = 0;
+    let otherCount = 0;
+
+    for(const t0 of toks0){
+      const t = normTok(t0);
+      if(!t) continue;
+
+      // ignore common repeat markers
+      const up = t.toUpperCase();
+      if(up === "REPEAT" || up === "REP" || up === "RPT") continue;
+      if(/^\(?X?\d+\)?$/.test(up)) continue;        // (2)  x2  4  etc
+      if(/^\d+X$/.test(up)) continue;                // 2X, 4X
+
+      if(isChordishToken(t)) chordCount++; else otherCount++;
     }
 
-    const alpha = raw.replace(/[^A-Za-z]/g,"");
-    const nonChordLetters = alpha.replace(/[A-Ga-g]/g,"");
-    if(nonChordLetters.length >= 4) return false;
+    const total = chordCount + otherCount;
+    if(chordCount === 0) return false;
+    if(total === 1) return chordCount === 1;
 
-    const tokens = raw
-      .replace(/[|\t]+/g, " ")
-      .replace(/[-–—]+/g, " ")
-      .split(/\s+/)
-      .map(s => s.trim())
-      .filter(Boolean)
-      .map(t => t
-        .replace(/^[^A-Za-z0-9#b\/\.]+/,"")
-        .replace(/[^A-Za-z0-9#b\/\.]+$/,"")
-        .replace(/♯/g,"#").replace(/♭/g,"b")
-      );
+    // chord lines should be overwhelmingly chord tokens.
+    // allow 1 small "extra" token like "(x2)" or a stray symbol.
+    if(chordCount >= 2 && otherCount <= 1) return true;
 
-    if(tokens.length === 0) return false;
+    // be a little forgiving for messy copy/paste (still mostly chords)
+    if(chordCount >= 3 && (chordCount / total) >= 0.65 && otherCount <= 2) return true;
 
-    const chordish = tokens.filter(isChordToken).length;
-    if(chordish >= 2 && chordish >= Math.ceil(tokens.length * 0.5)) return true;
-    return chordish >= Math.max(1, Math.ceil(tokens.length * 0.7));
+    return false;
   }
 
+    
   function buildSlotsFromAlignedChordLine(chordLineRaw, lyricLineRaw){
     const chordLine = String(chordLineRaw || "").replace(/\u00A0/g," ").replace(/\t/g," ");
     const lyricLine = String(lyricLineRaw || "");
@@ -618,7 +657,15 @@ const hasBreaks = lines.some(l => !!_parseBreakLine(l));
         .trim()
         .replace(/\s+/g,"")
         .replace(/♯/g,"#").replace(/♭/g,"b");
-      if(isChordToken(tok)) toks.push({ tok, col: start });
+      const pos = parsePositionalChordToken(tok);
+      if(pos){
+        const s = pos.slot;
+        const chord = pos.chord;
+        if(!slots[s]) slots[s] = chord;
+        else slots[s] = (slots[s] + " " + chord).trim();
+      }else if(isChordToken(tok)){
+        toks.push({ tok, col: start });
+      }
     }
     if(!toks.length) return slots;
 
@@ -6322,10 +6369,66 @@ function getLastWord(text){
 function getSeedFromTextarea(ta){
   if(!ta) return "";
 
-  // ✅ FULL view: seed from text before cursor (last word)
+  // Helper: skip chord-only / chord-input lines in Full view
+  function looksLikeChordInputLine(line){
+    const s = String(line || "").replace(/\u00A0/g," ").trim();
+    if(!s) return false;
+
+    // your break markers / separators
+    if(s === BREAK_LINE || s === "_") return true;
+
+    // explicit position-chord format: "1Am 5Dm" / "1E7 5Am"
+    if(/^[1-8]\s*[A-Ga-g]/.test(s)) return true;
+
+    const CH = /^[A-G](?:#|b)?(?:maj|min|m|dim|aug|\+|sus|add)?(?:2|4|5|6|7|9|11|13)?(?:maj7|M7|m7|m9|m11|m13|sus2|sus4|add9|add11|add13|dim7|hdim7|m7b5)?(?:b5|#5|b9|#9|b11|#11|b13|#13)?(?:\/[A-G](?:#|b)?)?$/i;
+
+    const toks = s.split(/[\s|,]+/).map(t=>t.trim()).filter(Boolean);
+    if(!toks.length) return false;
+
+    let chordish = 0, other = 0;
+    for(let t of toks){
+      t = t.replace(/^[\[\(\{]+/,"").replace(/[\]\)\}]+$/,"");
+      t = t.replace(/♯/g,"#").replace(/♭/g,"b");
+      t = t.replace(/[\.,;:]+$/,"");
+      t = t.replace(/^\d+/,""); // remove leading position digits (1..8)
+      t = t.trim();
+      if(!t) continue;
+
+      if(CH.test(t) || /^N\.?C\.?$/i.test(t)) chordish++;
+      else other++;
+    }
+
+    const total = chordish + other;
+    if(chordish === 0) return false;
+
+    // Strongly chord-ish line
+    if(other === 0 && chordish >= 1) return true;
+    if(chordish >= 2 && (chordish / Math.max(1,total)) >= 0.75 && other <= 1) return true;
+
+    return false;
+  }
+
+  // ✅ FULL view: use the previous LYRIC line's last word (skip chord lines)
   if(ta.classList && ta.classList.contains("fullBox")){
     const pos = (typeof ta.selectionStart === "number") ? ta.selectionStart : (ta.value || "").length;
     const before = String(ta.value || "").slice(0, pos);
+    const lines = normalizeLineBreaks(before).split("\n");
+    const curIdx = lines.length - 1;
+
+    for(let i = curIdx - 1; i >= 0; i--){
+      const raw = String(lines[i] || "");
+      const t = raw.trim();
+      if(!t) continue;
+
+      // skip headings + breaks + chord-input lines
+      if(isSectionHeadingLine(t)) continue;
+      if(looksLikeChordInputLine(t)) continue;
+
+      const w = getLastWord(t);
+      if(w) return w;
+    }
+
+    // fallback: last word before cursor
     return getLastWord(before) || "";
   }
 
@@ -6333,7 +6436,7 @@ function getSeedFromTextarea(ta){
   const card = ta.closest(".card");
   if(card){
     const root = el.sheetInner || el.sheetBody;
-const allCards = root ? Array.from(root.querySelectorAll(".card")) : [];
+    const allCards = root ? Array.from(root.querySelectorAll(".card")) : [];
     const idx = allCards.indexOf(card);
     const prev = allCards[idx - 1];
     if(prev){
@@ -6415,6 +6518,18 @@ const first = root ? (root.querySelector("textarea.lyrics") || root.querySelecto
 async function renderRhymes(seed){
   const word = normalizeWord(seed);
 
+  // ✅ allow horizontal swipe for suggestions
+  try{
+    el.rhymeWords.style.display = "flex";
+    el.rhymeWords.style.flexWrap = "nowrap";
+    el.rhymeWords.style.gap = "10px";
+    el.rhymeWords.style.overflowX = "auto";
+    el.rhymeWords.style.overflowY = "hidden";
+    el.rhymeWords.style.webkitOverflowScrolling = "touch";
+    el.rhymeWords.style.scrollBehavior = "smooth";
+    el.rhymeWords.style.paddingBottom = "6px";
+  }catch{}
+
   el.rhymeWords.innerHTML = "";
   el.rhymeTitle.textContent = word ? `Rhymes: ${word}` : "Rhymes";
 
@@ -6443,6 +6558,8 @@ async function renderRhymes(seed){
   list.forEach(w => {
     const b = document.createElement("div");
     b.className = "rWord";
+    b.style.flex = "0 0 auto";
+    b.style.whiteSpace = "nowrap";
     b.textContent = w;
     b.addEventListener("click", () => insertWordIntoLyrics(w));
     el.rhymeWords.appendChild(b);
