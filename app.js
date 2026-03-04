@@ -5,6 +5,7 @@
 
 // ✅ prevents heavy full-text auto-apply from running on every render
 let didInitialFullApply = false;
+let sheetHeaderBtnLock = false;
 
 /***********************
 FORCE-NUKE OLD SERVICE WORKER CACHE
@@ -26,6 +27,21 @@ const now = () => Date.now();
 
 const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
 const nextTick = () => new Promise(r => setTimeout(r, 0));
+
+/***********************
+Textarea autosize (Full page blocks)
+- Makes each section body expand to fit content
+- Prevents inner scrolling between headings
+***********************/
+function autosizeTextarea(ta){
+  if(!ta) return;
+  // Reset then expand to scrollHeight
+  ta.style.height = "auto";
+  ta.style.overflowY = "hidden";
+  // Use scrollHeight; add a tiny buffer to avoid jitter on Android
+  const h = (ta.scrollHeight || 0) + 2;
+  if(h > 0) ta.style.height = h + "px";
+}
 function clampToViewport(el, pad=12){
   if(!el) return;
 
@@ -438,6 +454,25 @@ FULL PAGE (Break-Line sections)
 const BREAK_LINE = "__________"; // 10 underscores
 const FULL_EDIT_SECTIONS = BASE_PAGES.slice(); // all non-Full pages
 
+// Global break-line parser
+// Used by both the legacy full-text parser and the newer Full-page block editor.
+// A "break" is either the raw BREAK_LINE, a single underscore "_", or underscore(s)
+// followed by a title (ex: "________VERSE 1" or "_VERSE 1").
+function _parseBreakLine(line){
+  const t = String(line || "").trim();
+  if(!t) return null;
+  if(t === BREAK_LINE) return { title: "" };
+  if(t === "_") return { title: "" };
+  if(t[0] === "_"){
+    const m = t.match(/^_{1,}\s*(.+)$/);
+    if(m){
+      const title = String(m[1] || "").trim();
+      return { title };
+    }
+  }
+  return null;
+}
+
 // match headings like "VERSE 1" or "VERSE 1:" (case-insensitive)
 function normalizeLineBreaks(s){
   return String(s || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -501,22 +536,7 @@ function parseFullTextToSectionCards(fullText){
   // Decide mode:
   // - If we see break lines, we parse by breaks -> PAGE 1..10 (+extras)
   // - Otherwise, we parse by headings (INTRO/VERSE/CHORUS/BRIDGE/OUTRO/INTERLUDE/etc.) into pages sequentially
-  function _parseBreakLine(line){
-  const t = String(line || "").trim();
-  if(!t) return null;
-  if(t === BREAK_LINE) return { title:"" };
-  if(t === "_") return { title:"" };
-  // allow inline titles: ________Verse 1  OR  _Verse 1
-  if(t[0] === "_"){
-    const m = t.match(/^_{1,}\s*(.+)$/);
-    if(m){
-      const title = String(m[1] || "").trim();
-      return { title };
-    }
-  }
-  return null;
-}
-const hasBreaks = lines.some(l => !!_parseBreakLine(l));
+  const hasBreaks = lines.some(l => !!_parseBreakLine(l));
 
 
   const buckets = {};
@@ -1093,6 +1113,16 @@ function upsertProject(p){
   localStorage.setItem(LS_CUR, p.id);
 }
 
+// Some newer UI paths call this helper.
+// Keep it simple and reliable: persist the current project snapshot.
+function saveCurrentProject(){
+  try{
+    if(state && state.project) upsertProject(state.project);
+  }catch(err){
+    console.error(err);
+  }
+}
+
 function deleteProjectById(id){
   const all = loadAllProjects().filter(p => p.id !== id);
   saveAllProjects(all);
@@ -1109,6 +1139,7 @@ function normalizeProject(p){
   if(!Array.isArray(p.enabledSections)) p.enabledSections = [];
   if(!p.sectionTitles || typeof p.sectionTitles !== "object") p.sectionTitles = {};
   if(!Array.isArray(p.deletedBaseSections)) p.deletedBaseSections = [];
+  if(!Array.isArray(p.extraSections)) p.extraSections = [];
 
   // --- Migration from old titled-sections (INTRO/VERSE/CHORUS/...) to PAGE 1..10
   // Any section keys that are not base pages get copied into the next available page
@@ -1142,9 +1173,11 @@ function normalizeProject(p){
     p.enabledSections = migratedEnabled;
   }catch{}
 
-  // sanitize enabledSections to valid pages only
-  p.enabledSections = (Array.isArray(p.enabledSections) ? p.enabledSections : [])
-    .filter(s => BASE_PAGES.includes(s));
+  // sanitize enabledSections to valid pages (base + extras)
+  {
+    const allowed = new Set([...(BASE_PAGES||[]), ...((Array.isArray(p.extraSections)?p.extraSections:[]))]);
+    p.enabledSections = (Array.isArray(p.enabledSections) ? p.enabledSections : []).filter(s => allowed.has(s));
+  }
 
   // Always have at least PAGE 1 enabled
   if(p.enabledSections.length === 0) p.enabledSections = [BASE_PAGES[0]];
@@ -4631,24 +4664,28 @@ ${BREAK_LINE}
 }
 
 function buildFullScaffold(){
-  // 10 blank break sections by default
-  return Array.from({length:10}, ()=>`${BREAK_LINE}\n`).join("\n");
+  // ✅ Start with ONE section by default.
+  // Additional sections are created by the user tapping the + button inside Full.
+  return `${BREAK_LINE}
+
+`;
 }
 // Adds any missing headings back in (does NOT reorder your content)
 function ensureFullBreaksPresent(fullText){
   const text = normalizeLineBreaks(fullText || "");
   const lines = text.split("\n");
-  const present = lines.filter(l => String(l||"").trim() === BREAK_LINE).length;
 
-  const need = Math.max(0, 10 - present);
-  if(need <= 0) return text;
+  // ✅ treat ANY valid break (raw BREAK_LINE, "_" or "____Title") as a present break.
+  // This prevents a stray blank "Song Part" from being injected at the top when we
+  // emit inline-title breaks like:  ________Verse 1
+  const hasAnyBreak = lines.some(l => !!_parseBreakLine(l));
+  if(hasAnyBreak) return text;
 
-  const suffix =
-    (text.trim().length ? "\n\n" : "") +
-    Array.from({length:need}, ()=>`${BREAK_LINE}\n`).join("\n");
-
-  return text.replace(/\s*$/, "") + suffix;
+  // If user pasted lyrics with no breaks, insert a single break at the top.
+  const prefix = `${BREAK_LINE}\n\n`;
+  return prefix + text.replace(/^\s+/, "");
 }
+
 
 // legacy name (older code paths)
 function ensureFullHeadingsPresent(fullText){
@@ -4671,12 +4708,18 @@ function syncFullTextFromSections(){
     const semis = getTransposeSemis() || 0;
 
     // Build break-line sections
-    getAllSectionOrder().filter(s => s !== "Full").forEach(sec => {
+    // IMPORTANT: Only emit sections that are visible (enabled or have content).
+    // Using getAllSectionOrder() here caused Full view to suddenly sprout many
+    // empty pages when the user tapped + on a card page.
+    getVisibleSectionPages().filter(s => s !== "Full").forEach(sec => {
       const ttl = (state.project.sectionTitles && state.project.sectionTitles[sec])
         ? String(state.project.sectionTitles[sec] || "").trim()
         : "";
       // ✅ Title appears to the RIGHT of the break line:  ________Verse 1
       out.push(BREAK_LINE + (ttl ? ttl : ""));
+
+      // ✅ Always keep at least one blank line under the pill so it never blocks lyrics
+      out.push("");
 
       const arr = (state.project.sections && state.project.sections[sec]) ? state.project.sections[sec] : [];
 
@@ -4776,6 +4819,7 @@ function renderSheetTitleBar(){
     titleInput = document.createElement("input");
     titleInput.type = "text";
     titleInput.placeholder = "Title (optional)…";
+    titleInput.className = "songPartPill headingPill";
     titleInput.value = (state.project.sectionTitles && state.project.sectionTitles[state.currentSection]) ? String(state.project.sectionTitles[state.currentSection] || "") : "";
     titleInput.style.flex = "1 1 0";
     titleInput.style.minWidth = "90px";
@@ -4783,6 +4827,8 @@ function renderSheetTitleBar(){
     titleInput.style.borderRadius = "12px";
     titleInput.style.border = "1px solid rgba(0,0,0,.18)";
     titleInput.style.padding = "6px 10px";
+    titleInput.style.background = "var(--hiYellow)";
+    titleInput.style.border = "1px solid rgba(0,0,0,.22)";
     titleInput.style.fontWeight = "900";
     titleInput.addEventListener("keydown", (e) => {
       if(e.key === "Enter"){ e.preventDefault(); titleInput.blur(); }
@@ -4806,7 +4852,7 @@ function renderSheetTitleBar(){
     left.appendChild(titleInput);
   }else{
     // ✅ Single-line hint on Full, left-aligned
-    leftHint.textContent = "Paste/edit • Break: ________ • Name after break";
+    leftHint.textContent = "Full Song View";
     left.appendChild(leftHint);
   }
 
@@ -4827,8 +4873,9 @@ function renderSheetTitleBar(){
     addBtn.style.height = "34px";
     addBtn.style.borderRadius = "999px";
     addBtn.style.fontWeight = "1100";
-
     addBtn.addEventListener("click", () => {
+      if(sheetHeaderBtnLock) return;
+      sheetHeaderBtnLock = true; setTimeout(()=>{sheetHeaderBtnLock=false;}, 220);
       // Add based on the LAST visible page (excluding Full)
       const vis = getVisibleSectionPages().filter(s => s !== "Full");
       const last = vis.length ? vis[vis.length-1] : "PAGE 1";
@@ -4863,6 +4910,8 @@ function renderSheetTitleBar(){
     delBtn.style.fontWeight = "1100";
 
     delBtn.addEventListener("click", () => {
+      if(sheetHeaderBtnLock) return;
+      sheetHeaderBtnLock = true; setTimeout(()=>{sheetHeaderBtnLock=false;}, 220);
       const pages = getVisibleSectionPages().filter(s => s !== "Full");
       // don't allow deleting the first Verse 1 base page
       const candidates = pages.filter(s => !BASE_PAGES.includes(s));
@@ -4893,6 +4942,8 @@ function renderSheetTitleBar(){
     addBtn.style.borderRadius = "999px";
     addBtn.style.fontWeight = "1100";
    addBtn.addEventListener("click", () => {
+  if(sheetHeaderBtnLock) return;
+  sheetHeaderBtnLock = true; setTimeout(()=>{sheetHeaderBtnLock=false;}, 220);
   const next = findNextSectionToEnable(state.currentSection);
 
   let target = null;
@@ -4926,6 +4977,8 @@ function renderSheetTitleBar(){
     delBtn.style.borderRadius = "999px";
     delBtn.style.fontWeight = "1100";
     delBtn.addEventListener("click", () => {
+      if(sheetHeaderBtnLock) return;
+      sheetHeaderBtnLock = true; setTimeout(()=>{sheetHeaderBtnLock=false;}, 220);
       const sec = state.currentSection;
       if(!confirm(`Delete page "${sec}"? This clears its cards and hides the page.`)) return;
 
@@ -4958,12 +5011,248 @@ function renderSheet(){
   state.playCardIndex = null;
 
 if(state.currentSection === "Full"){
-  // ✅ Hint is rendered inside the title bar (left side)
+  // ✅ Full page editor is now SECTION BLOCKS (no overlay), so:
+  // - No black break lines are visible
+  // - Yellow pill + buttons never overlap lyrics
   if(el.sheetHint) el.sheetHint.textContent = "";
   (el.sheetInner || el.sheetBody).innerHTML = "";
 
+  // Ensure at least one section exists
+  if(!String(state.project.fullText || "").trim()){
+    state.project.fullText = `${BREAK_LINE}\n\n`;
+    upsertProject(state.project);
+  }
+
+  function splitBlocks(fullText){
+    const lines = String(fullText || "").replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n");
+    const blocks = [];
+    let cur = null;
+    const flush = () => {
+      if(!cur) return;
+      while(cur.body.length && String(cur.body[0]||"").trim() === "") cur.body.shift();
+      while(cur.body.length && String(cur.body[cur.body.length-1]||"").trim() === "") cur.body.pop();
+      blocks.push(cur);
+      cur = null;
+    };
+    for(const raw of lines){
+      const br = _parseBreakLine(raw);
+      if(br){
+        flush();
+        cur = { title: String(br.title||"").trim(), body: [] };
+        continue;
+      }
+      if(!cur) continue;
+      cur.body.push(String(raw ?? ""));
+    }
+    flush();
+    if(!blocks.length) blocks.push({ title:"", body:[] });
+    return blocks;
+  }
+
+  function blocksToFullText(blocks){
+    const out = [];
+    for(const b of blocks){
+      const t = String(b.title||"").trim();
+      out.push(BREAK_LINE + (t ? t : ""));
+      out.push("");
+      const body = Array.isArray(b.body) ? b.body : [];
+      for(const ln of body) out.push(String(ln ?? ""));
+      out.push("");
+      out.push("");
+    }
+    while(out.length && out[out.length-1] === "") out.pop();
+    return out.join("\n") + "\n";
+  }
+
+  let blocks = splitBlocks(state.project.fullText || "");
+
+  // Ensure we have enough section names for block mapping
+  const pageOrder = getAllSectionOrder().filter(s => s !== "Full");
+  while(pageOrder.length < blocks.length){
+    editProject("ensureExtras", () => {
+      createExtraSection({ enable:false });
+    });
+    pageOrder.splice(0, pageOrder.length, ...getAllSectionOrder().filter(s => s !== "Full"));
+  }
+
+  const fullWrap = document.createElement("div");
+  fullWrap.className = "fullSectionEditor";
+
+  let commitTimer = null;
+  function commitNow(){
+    const newText = blocksToFullText(blocks);
+    editProject("fullBlocks", () => {
+      state.project.fullText = newText;
+      applyFullTextToProjectSections(state.project.fullText || "");
+      cleanupDeletedBaseSections();
+    });
+    renderTabs();
+    renderSheetTitleBar();
+    refreshDisplayedNoteCells();
+    updateKeyFromAllNotes();
+    saveCurrentProject();
+  }
+  function commitDebounced(){
+    if(commitTimer) clearTimeout(commitTimer);
+    commitTimer = setTimeout(() => {
+      commitNow();
+      refreshRhymesFromActive();
+    }, 160);
+  }
+
+  // ✅ Make + / × feel instant on mobile: update UI immediately, then do heavy sync in the debounce.
+  // Also guard against accidental double-taps.
+  let pillActionLock = false;
+  function withPillActionLock(fn){
+    if(pillActionLock) return;
+    pillActionLock = true;
+    try{ fn(); }finally{ setTimeout(()=>{ pillActionLock = false; }, 320); }
+  }
+
+  // ✅ Avoid mobile "double fire" (pointerup + click). Use ONE tap event.
+  function bindTap(elm, handler){
+    if(!elm) return;
+    const hasPointer = typeof window !== "undefined" && !!window.PointerEvent;
+    if(hasPointer){
+      // On some mobile browsers, a synthetic click can still fire after pointerup.
+      // We handle pointerup and explicitly swallow click to prevent double-add/delete.
+      elm.addEventListener("pointerup", (e)=>{ e.preventDefault(); e.stopPropagation(); handler(e); }, {passive:false});
+      elm.addEventListener("click", (e)=>{ e.preventDefault(); e.stopPropagation(); }, {capture:true});
+    }else{
+      elm.addEventListener("click", (e)=>{ e.preventDefault(); e.stopPropagation(); handler(e); });
+    }
+  }
+
+  function quickSaveFullText(){
+    // Persist immediately so refresh never loses newly added/removed blocks.
+    try{
+      const newText = blocksToFullText(blocks);
+      editProject("quickFullSave", () => { state.project.fullText = newText; });
+      saveCurrentProject();
+    }catch(err){ console.error(err); }
+  }
+
+  blocks.forEach((b, idx) => {
+    const sec = pageOrder[idx] || null;
+
+    const card = document.createElement("div");
+    card.className = "fullSectionCard";
+
+    const head = document.createElement("div");
+    head.className = "fullSectionHead";
+    const leftLine = document.createElement("div");
+    leftLine.className = "fullBreakLine";
+    const rightLine = document.createElement("div");
+    rightLine.className = "fullBreakLine";
+
+    const pill = document.createElement("input");
+    pill.type = "text";
+    pill.className = "songPartPill";
+    pill.placeholder = "Song Part";
+    pill.value = String(b.title || "");
+    pill.addEventListener("keydown", (e) => {
+      if(e.key === "Enter"){ e.preventDefault(); pill.blur(); }
+    });
+    pill.addEventListener("input", () => {
+      b.title = String(pill.value || "");
+      editProject("pillTitle", () => {
+        ensurePageMeta();
+        if(!state.project.sectionTitles) state.project.sectionTitles = {};
+        if(sec){
+          const v = String(b.title||"").trim();
+          if(v) state.project.sectionTitles[sec] = v;
+          else { try{ delete state.project.sectionTitles[sec]; }catch{} }
+        }
+      });
+      renderTabs();
+      renderSheetTitleBar();
+      commitDebounced();
+    });
+
+    head.appendChild(leftLine);
+    head.appendChild(pill);
+    head.appendChild(rightLine);
+
+    const ta = document.createElement("textarea");
+    ta.className = "fullSectionText";
+    ta.placeholder = "Lyrics / chords...";
+    ta.value = Array.isArray(b.body) ? b.body.join("\n") : "";
+    autosizeTextarea(ta);
+    ta.addEventListener("focus", () => { lastLyricsTextarea = ta; refreshRhymesFromActive(); });
+    ta.addEventListener("click", () => { lastLyricsTextarea = ta; refreshRhymesFromActive(); });
+    ta.addEventListener("input", () => {
+      autosizeTextarea(ta);
+      b.body = String(ta.value || "").replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n");
+      commitDebounced();
+    });
+    ta.addEventListener("paste", () => setTimeout(() => autosizeTextarea(ta), 0));
+
+    const actions = document.createElement("div");
+    actions.className = "fullSectionActions";
+    const addBtn = document.createElement("button");
+    addBtn.className = "pillBtn";
+    addBtn.textContent = "+";
+    addBtn.title = "Add song part";
+    addBtn.type = "button";
+    bindTap(addBtn, () => {
+      withPillActionLock(() => {
+        blocks.splice(idx + 1, 0, { title:"", body:[] });
+        state.project.fullText = blocksToFullText(blocks);
+        quickSaveFullText();
+        renderSheet();
+        commitDebounced();
+      });
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "pillBtn";
+    delBtn.textContent = "×";
+    delBtn.title = "Delete this song part";
+    delBtn.type = "button";
+    const doDelete = () => {
+      if(!confirm("Delete this song part section?")) return;
+      if(blocks.length <= 1){
+        blocks = [{ title:"", body:[] }];
+      }else{
+        blocks.splice(idx, 1);
+      }
+      // Remove the corresponding page/card immediately (if it exists)
+      if(sec){
+        try{ deleteSectionPage(sec); }catch{}
+      }
+      state.project.fullText = blocksToFullText(blocks);
+      quickSaveFullText();
+      renderSheet();
+      commitDebounced();
+    };
+    bindTap(delBtn, () => {
+      withPillActionLock(doDelete);
+    });
+    actions.appendChild(addBtn);
+    actions.appendChild(delBtn);
+
+    card.appendChild(head);
+    card.appendChild(ta);
+    card.appendChild(actions);
+    fullWrap.appendChild(card);
+  });
+
+  (el.sheetInner || el.sheetBody).appendChild(fullWrap);
+  requestAnimationFrame(() => {
+    try{ fullWrap.querySelectorAll("textarea.fullSectionText").forEach(autosizeTextarea); }catch{}
+  });
+  return;
+
   const wrap = document.createElement("div");
   wrap.className = "fullBoxWrap";
+
+  // ✅ Break title pills now live INSIDE the Full textarea at every break line.
+  //    We render an overlay that aligns pills to the break-line rows in the textarea.
+  const pillPages = getAllSectionOrder().filter(s => s !== "Full");
+
+
+  const host = document.createElement("div");
+  host.className = "fullPillHost";
 
   const ta = document.createElement("textarea");
   ta.className = "fullBox";
@@ -5006,30 +5295,312 @@ if(!String(state.project.fullText || "").trim()){
 }
 ta.value = state.project.fullText || "";
 
+  const overlay = document.createElement("div");
+  overlay.className = "fullPillOverlay";
+  host.appendChild(ta);
+  host.appendChild(overlay);
+
 
   // Fill the available space better (no index.html edits required)
   ta.style.width = "100%";
   ta.style.minHeight = "calc(100vh - 220px)";
   ta.style.resize = "none";
 
-  let tmr = null;
-  ta.addEventListener("input", () => {
-  // keep live text in memory immediately (no history yet)
-  state.project.fullText = ta.value;
+  // ---------- Break-pill overlay helpers ----------
+  function parseBreakLinesFromText(text){
+    const lines = String(text || "").replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n");
+    const breaks = [];
+    for(let i=0;i<lines.length;i++){
+      const raw = String(lines[i] ?? "");
+      const t = raw.trim();
+      if(!t) continue;
+      if(t === BREAK_LINE || t === "_"){
+        breaks.push({ lineIndex:i, title:"" });
+        continue;
+      }
+      if(t[0] === "_"){
+        const m = t.match(/^_{1,}\s*(.+)?$/);
+        const title = (m && m[1]) ? String(m[1] || "").trim() : "";
+        breaks.push({ lineIndex:i, title });
+      }
+    }
+    return { lines, breaks };
+  }
 
-  // debounce so it doesn’t lag while typing
-  if(tmr) clearTimeout(tmr);
-  tmr = setTimeout(() => {
-    // ✅ snapshot BEFORE changes (Undo works)
-    editProject("fullText", () => {
+  function setBreakLineTitleByOccurrence(occIdx, title){
+    const parsed = parseBreakLinesFromText(ta.value);
+    const b = parsed.breaks[occIdx];
+    if(!b) return;
+
+    const lines = parsed.lines.slice();
+    const t = String(title || "").trim();
+    // Force canonical inline title form: ________Title
+    lines[b.lineIndex] = BREAK_LINE + (t ? t : "");
+    const newText = lines.join("\n");
+
+    if(newText === ta.value) return;
+
+    // Preserve cursor as best we can (keep it close)
+    const selStart = ta.selectionStart;
+    const selEnd = ta.selectionEnd;
+    ta.value = newText;
+    try{
+      ta.selectionStart = clamp(selStart, 0, ta.value.length);
+      ta.selectionEnd = clamp(selEnd, 0, ta.value.length);
+    }catch{}
+
+    // Commit via the same pipeline used by typing in Full
+    onFullTextareaInput();
+  }
+  function insertSectionAfterOccurrence(occIdx){
+    const parsed = parseBreakLinesFromText(ta.value);
+    const lines = parsed.lines.slice();
+    const breaks = parsed.breaks;
+
+    if(!breaks.length) return;
+
+    // insertion point is right BEFORE the next break, or end of text
+    let insertAt = (occIdx + 1 < breaks.length) ? breaks[occIdx + 1].lineIndex : lines.length;
+
+    // Ensure at least one blank line before the new break (so + / × feels "under" the section)
+    if(insertAt > 0 && String(lines[insertAt - 1] || "").trim() !== ""){
+      lines.splice(insertAt, 0, "");
+      insertAt += 1;
+    }
+
+    // Insert new break + a blank line for typing
+    lines.splice(insertAt, 0, BREAK_LINE, "");
+
+    ta.value = lines.join("\n");
+    state.project.fullText = ta.value;
+
+    // Move cursor to the blank line right after the inserted break
+    try{
+      const targetLine = insertAt + 1; // the blank line after BREAK_LINE
+      let idx = 0;
+      for(let i=0;i<lines.length;i++){
+        if(i === targetLine){ break; }
+        idx += lines[i].length + 1;
+      }
+      ta.focus();
+      ta.setSelectionRange(idx, idx);
+    }catch{}
+
+    onFullTextareaInput();
+    positionOverlayPills();
+  }
+
+  function deleteSectionByOccurrence(occIdx){
+    const parsed = parseBreakLinesFromText(ta.value);
+    const lines = parsed.lines.slice();
+    const breaks = parsed.breaks;
+
+    if(!breaks.length) return;
+
+    // If this is the only section, just clear its content (keep one break)
+    if(breaks.length <= 1){
+      ta.value = `${BREAK_LINE}\n\n`;
       state.project.fullText = ta.value;
-      applyFullTextToProjectSections(state.project.fullText || "");
-    });
+      onFullTextareaInput();
+      positionOverlayPills();
+      return;
+    }
 
-    updateKeyFromAllNotes();
-    // don’t renderSheet() here (would move cursor)
-  }, 180);
-});
+    const startLine = breaks[occIdx].lineIndex;
+    const endLine = (occIdx + 1 < breaks.length) ? breaks[occIdx + 1].lineIndex : lines.length;
+
+    lines.splice(startLine, Math.max(0, endLine - startLine));
+
+    // Always ensure the text begins with a break line
+    if(String(lines[0] || "").trim() !== BREAK_LINE){
+      lines.unshift(BREAK_LINE, "");
+    }
+
+    ta.value = lines.join("\n");
+    state.project.fullText = ta.value;
+
+    onFullTextareaInput();
+    positionOverlayPills();
+  }
+
+
+  function positionOverlayPills(){
+    overlay.innerHTML = "";
+
+    const parsed = parseBreakLinesFromText(ta.value);
+    const breaks = parsed.breaks;
+    if(!breaks.length) return;
+
+    const cs = getComputedStyle(ta);
+    const lineH = parseFloat(cs.lineHeight) || 18;
+    const padT = parseFloat(cs.paddingTop) || 0;
+    const padB = parseFloat(cs.paddingBottom) || 0;
+    const scrollTop = ta.scrollTop || 0;
+    const viewH = ta.clientHeight || 0;
+
+    // Visual sizes for overlay elements
+    const pillH = 34;
+    const rowH  = Math.max(pillH + 8, lineH + 10); // also masks the raw break-line text
+
+    const pages = pillPages.slice();
+    for(let i=0;i<breaks.length;i++){
+      const sec = pages[i] || null;
+      if(!sec) break;
+
+      const y = padT + (breaks[i].lineIndex * lineH) - scrollTop;
+
+      // Only render if near viewport (small buffer)
+      if(y < -80 || y > viewH + 80) continue;
+
+      const row = document.createElement("div");
+      row.className = "breakRow";
+      // Center the pill over the break-line, and mask the literal "__________TITLE" text behind it
+      row.style.top = `${Math.max(0, Math.round(y - ((rowH - lineH) / 2)))}px`;
+      row.style.height = `${Math.round(rowH)}px`;
+      // Allow editing the pill input (row acts as a mask, input handles the interaction)
+      row.style.pointerEvents = "auto";
+      row.style.background = "#fff";
+      row.style.borderRadius = "16px";
+
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.className = "songPartPill";
+      inp.placeholder = "Song Part";
+
+      // Two-way: prefer explicit project title, else derive from Full break line
+      const stored = (state.project.sectionTitles && state.project.sectionTitles[sec])
+        ? String(state.project.sectionTitles[sec] || "").trim()
+        : "";
+      const derived = String(breaks[i].title || "").trim();
+      inp.value = stored || derived;
+
+      inp.addEventListener("keydown", (e) => {
+        if(e.key === "Enter"){ e.preventDefault(); inp.blur(); }
+      });
+
+      // keep the pill sized so it doesn't block lyrics (lyrics start beneath a blank line)
+      inp.style.height = `${pillH}px`;
+
+      let tmrP = null;
+      inp.addEventListener("input", () => {
+        if(tmrP) clearTimeout(tmrP);
+        tmrP = setTimeout(() => {
+          const val = String(inp.value || "").trim();
+          editProject("fullBreakTitle", () => {
+            ensurePageMeta();
+            if(val) state.project.sectionTitles[sec] = val;
+            else { try{ delete state.project.sectionTitles[sec]; }catch{} }
+          });
+
+          // Update the actual break line text for this occurrence so parsing/sync stays correct
+          setBreakLineTitleByOccurrence(i, val);
+
+          // Keep pages + Full synced
+          editProject("syncAfterFullBreakTitle", () => {
+            syncFullTextFromSections();
+          });
+          updateFullIfVisible();
+        }, 180);
+      });
+
+      row.appendChild(inp);
+      overlay.appendChild(row);
+
+      // + / × action row UNDER this section's text (not on top of lyrics)
+      try{
+        const endLine = (i + 1 < breaks.length) ? breaks[i + 1].lineIndex : parsed.lines.length;
+
+        // Find last non-empty line within this section (between this break and the next break)
+        let last = breaks[i].lineIndex;
+        for(let k=endLine-1;k>breaks[i].lineIndex;k--){
+          const t = String(parsed.lines[k] || "").trim();
+          if(t){ last = k; break; }
+        }
+
+        let yBtn = padT + ((last + 1) * lineH) - scrollTop + 6;
+
+        // Keep the controls at least under the pill area
+        yBtn = Math.max(y + rowH + 6, yBtn);
+
+        // Clamp above next pill to prevent collisions
+        if(i + 1 < breaks.length){
+          const yNext = padT + (breaks[i + 1].lineIndex * lineH) - scrollTop;
+          yBtn = Math.min(yBtn, yNext - rowH - 8);
+        }
+
+        if(yBtn >= -80 && yBtn <= viewH + 80){
+          const act = document.createElement("div");
+          act.className = "breakActions";
+          act.style.top = `${Math.max(0, Math.round(yBtn))}px`;
+          act.style.pointerEvents = "auto";
+
+          const bAdd = document.createElement("button");
+          bAdd.type = "button";
+          bAdd.className = "breakActBtn";
+          bAdd.textContent = "+";
+          bAdd.addEventListener("click", (e) => {
+            e.preventDefault(); e.stopPropagation();
+            insertSectionAfterOccurrence(i);
+          });
+
+          const bDel = document.createElement("button");
+          bDel.type = "button";
+          bDel.className = "breakActBtn";
+          bDel.textContent = "×";
+          bDel.addEventListener("click", (e) => {
+            e.preventDefault(); e.stopPropagation();
+            deleteSectionByOccurrence(i);
+          });
+
+          act.appendChild(bAdd);
+          act.appendChild(bDel);
+          overlay.appendChild(act);
+        }
+      }catch{}
+
+    }
+
+    // prevent overlay from blocking textarea bottom taps
+    overlay.style.paddingBottom = `${padB}px`;
+  }
+
+  // Debounced Full input handler (shared by typing and pill edits)
+  let tmr = null;
+  function onFullTextareaInput(){
+    // keep live text in memory immediately (no history yet)
+    state.project.fullText = ta.value;
+
+    if(tmr) clearTimeout(tmr);
+    tmr = setTimeout(() => {
+      editProject("fullText", () => {
+        state.project.fullText = ta.value;
+        // Apply changes -> sections/cards
+        applyFullTextToProjectSections(state.project.fullText || "");
+        // Ensure we keep enough breaks for stable UI
+        state.project.fullText = ensureFullBreaksPresent(state.project.fullText || "");
+      });
+      updateFullIfVisible();
+      refreshKeyUI();
+      // re-align pills after parsing may normalize break lines
+      positionOverlayPills();
+    }, 220);
+  }
+
+  // Keep overlay aligned while scrolling
+  ta.addEventListener("scroll", () => positionOverlayPills(), { passive:true });
+
+  // Rebuild overlay as the user types
+  ta.addEventListener("input", () => {
+    onFullTextareaInput();
+    positionOverlayPills();
+  });
+
+  // Initial overlay build
+  queueMicrotask(() => positionOverlayPills());
+
+  wrap.appendChild(host);
+
+  // (the rest of the Full-view render continues below)
 
   // ✅ On first open: optionally seed sections from Full text ONCE (prevents freezes)
   if(!didInitialFullApply){
@@ -5058,7 +5629,7 @@ ta.value = state.project.fullText || "";
     }
   }
 
-  wrap.appendChild(ta);
+  // textarea is inside `host` (so overlay can sit on top)
 (el.sheetInner || el.sheetBody).appendChild(wrap);
   return;
 }
@@ -6739,18 +7310,19 @@ function getVisibleSectionPages(){
 }
 
 function findNextSectionToEnable(fromSec){
-  // ✅ Sequential add:
-  // - Adds the NEXT hidden base page after fromSec
-  // - If that NEXT base page was manually deleted (and still has no content),
-  //   we create an EXTRA page instead (we do NOT skip ahead to later base pages).
+  // ✅ Sequential add (NO wrap):
+  // - Adds the NEXT hidden base page AFTER fromSec (in base order)
+  // - If that next base page was manually deleted (and still has no content),
+  //   create an EXTRA page instead.
+  // - If there is no remaining hidden base page ahead, create an EXTRA page.
 
   const base = BASE_SECTION_ORDER.filter(s => s !== "Full");
   const curIdx = Math.max(0, base.indexOf(fromSec));
 
-  for(let step=1; step<=base.length; step++){
-    const sec = base[(curIdx + step) % base.length];
+  for(let i = curIdx + 1; i < base.length; i++){
+    const sec = base[i];
 
-    // already visible? keep looking
+    // already visible? keep looking forward
     if(isSectionVisible(sec)) continue;
 
     const deleted = (state.project?.deletedBaseSections || []).includes(sec);
@@ -6762,6 +7334,7 @@ function findNextSectionToEnable(fromSec){
 
   return "__CREATE_EXTRA__";
 }
+
 
 function enableSection(sec){
   if(!state.project) return;
